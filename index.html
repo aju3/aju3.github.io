@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Worm Evolution Simulator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            touch-action: manipulation; /* Prevents double-tap zoom on mobile */
+        }
+        canvas {
+            background: #1a202c; /* A slightly lighter shade than the body for contrast */
+            border-radius: 0.5rem;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.1);
+        }
+        .stat-card {
+            background-color: #2d3748; /* gray-800 */
+            border-radius: 0.5rem;
+            padding: 0.75rem;
+            text-align: center;
+            border: 1px solid #4a5568;
+        }
+        .btn {
+            background-color: #4a5568; /* gray-600 */
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease-in-out;
+            border: none;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .btn:hover {
+            background-color: #718096; /* gray-500 */
+        }
+        .btn:active, .btn.active {
+            background-color: #2c5282; /* blue-800 */
+            transform: translateY(1px);
+            box-shadow: 0 2px 3px rgba(0, 0, 0, 0.1);
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-200 flex flex-col items-center justify-center min-h-screen p-4">
+
+    <div class="w-full max-w-4xl mx-auto">
+        <h1 class="text-3xl md:text-4xl font-bold text-center mb-4 text-cyan-300 tracking-wider">
+            Worm Evolution Simulator
+        </h1>
+        <p class="text-center text-gray-400 mb-6">Watch as worms evolve to seek food and avoid predators.</p>
+
+        <!-- Statistics Display -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+            <div class="stat-card">
+                <p class="text-sm text-gray-400">Generation</p>
+                <p id="generation-stat" class="text-xl font-bold text-cyan-400">1</p>
+            </div>
+            <div class="stat-card">
+                <p class="text-sm text-gray-400">Population</p>
+                <p id="population-stat" class="text-xl font-bold text-green-400">0</p>
+            </div>
+            <div class="stat-card">
+                <p class="text-sm text-gray-400">Avg. Lifespan</p>
+                <p id="lifespan-stat" class="text-xl font-bold text-purple-400">0s</p>
+            </div>
+             <div class="stat-card">
+                <p class="text-sm text-gray-400">Top Lifespan</p>
+                <p id="top-lifespan-stat" class="text-xl font-bold text-yellow-400">0s</p>
+            </div>
+        </div>
+
+        <!-- Simulation Canvas -->
+        <canvas id="simulationCanvas" class="w-full aspect-video"></canvas>
+
+        <!-- Controls -->
+        <div class="flex justify-center items-center gap-4 mt-4">
+            <button id="start-pause-btn" class="btn">Start</button>
+            <button id="reset-btn" class="btn">Reset</button>
+            <button id="fast-forward-btn" class="btn">2x Speed</button>
+        </div>
+    </div>
+
+    <script>
+        // DOM Elements
+        const canvas = document.getElementById('simulationCanvas');
+        const ctx = canvas.getContext('2d');
+        const startPauseBtn = document.getElementById('start-pause-btn');
+        const resetBtn = document.getElementById('reset-btn');
+        const fastForwardBtn = document.getElementById('fast-forward-btn');
+        
+        // Stats
+        const generationStat = document.getElementById('generation-stat');
+        const populationStat = document.getElementById('population-stat');
+        const lifespanStat = document.getElementById('lifespan-stat');
+        const topLifespanStat = document.getElementById('top-lifespan-stat');
+
+        // --- Simulation Configuration ---
+        const config = {
+            world: {
+                width: 1280,
+                height: 720,
+            },
+            simulation: {
+                foodSpawnRate: 0.1, // Chance to spawn food each frame
+                maxFood: 70,
+                initialWorms: 30,
+                initialPredators: 3,
+                maxPredators: 5,
+                predatorSpawnChance: 0.001,
+            },
+            worm: {
+                lifespan: 15, // seconds
+                size: 5,
+                maxSpeed: 2,
+                energy: 100,
+                reproductionEnergy: 200,
+                visionRadius: 100,
+                mutationRate: 0.05,
+            },
+            predator: {
+                size: 10,
+                maxSpeed: 2.2,
+                visionRadius: 150,
+            },
+            food: {
+                size: 3,
+                energy: 50,
+            },
+        };
+
+        // --- Simulation State ---
+        let state = {
+            isRunning: false,
+            isFastForward: false,
+            frameCount: 0,
+            worms: [],
+            predators: [],
+            food: [],
+            generation: 1,
+            totalLifespan: 0,
+            deathsThisGeneration: 0,
+            topLifespan: 0,
+        };
+
+        // --- Utility Functions ---
+        const random = (min, max) => Math.random() * (max - min) + min;
+        const randomInt = (min, max) => Math.floor(random(min, max + 1));
+        const distance = (a, b) => Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
+        const normalize = (vec) => {
+            const mag = Math.sqrt(vec.x**2 + vec.y**2);
+            return mag > 0 ? { x: vec.x / mag, y: vec.y / mag } : { x: 0, y: 0 };
+        };
+
+        // --- Entity Classes ---
+        
+        // Genes control the worm's behavior. Higher values mean stronger reactions.
+        // Positive food weight = attraction, negative predator weight = repulsion.
+        class Genes {
+            constructor(inheritedGenes) {
+                if (inheritedGenes) {
+                    this.foodAttraction = inheritedGenes.foodAttraction + (Math.random() - 0.5) * config.worm.mutationRate;
+                    this.predatorRepulsion = inheritedGenes.predatorRepulsion + (Math.random() - 0.5) * config.worm.mutationRate;
+                } else {
+                    // Start with random genes
+                    this.foodAttraction = random(0, 1);
+                    this.predatorRepulsion = random(-1, 0);
+                }
+            }
+        }
+
+        class Worm {
+            constructor(x, y, genes) {
+                this.x = x;
+                this.y = y;
+                this.vx = random(-1, 1);
+                this.vy = random(-1, 1);
+                this.size = config.worm.size;
+                this.energy = config.worm.energy;
+                this.maxSpeed = config.worm.maxSpeed;
+                this.age = 0;
+                this.genes = genes || new Genes();
+                this.isDead = false;
+                this.color = `hsl(${Math.abs(this.genes.foodAttraction * 180) % 360}, 70%, 60%)`;
+            }
+
+            sense(food, predators) {
+                let nearestFood = null;
+                let nearestPredator = null;
+                let minFoodDist = config.worm.visionRadius;
+                let minPredatorDist = config.worm.visionRadius;
+
+                food.forEach(f => {
+                    const d = distance(this, f);
+                    if (d < minFoodDist) {
+                        minFoodDist = d;
+                        nearestFood = f;
+                    }
+                });
+
+                predators.forEach(p => {
+                    const d = distance(this, p);
+                    if (d < minPredatorDist) {
+                        minPredatorDist = d;
+                        nearestPredator = p;
+                    }
+                });
+                
+                return { nearestFood, nearestPredator };
+            }
+
+            update(food, predators) {
+                if (this.isDead) return;
+
+                const { nearestFood, nearestPredator } = this.sense(food, predators);
+                
+                let steerX = 0;
+                let steerY = 0;
+                
+                if (nearestFood) {
+                    steerX += (nearestFood.x - this.x) * this.genes.foodAttraction;
+                    steerY += (nearestFood.y - this.y) * this.genes.foodAttraction;
+                }
+                
+                if (nearestPredator) {
+                    steerX += (this.x - nearestPredator.x) * -this.genes.predatorRepulsion;
+                    steerY += (this.y - nearestPredator.y) * -this.genes.predatorRepulsion;
+                }
+
+                const steerNorm = normalize({ x: steerX, y: steerY });
+                
+                this.vx += steerNorm.x * 0.1;
+                this.vy += steerNorm.y * 0.1;
+
+                // Limit speed
+                const speed = Math.sqrt(this.vx**2 + this.vy**2);
+                if (speed > this.maxSpeed) {
+                    this.vx = (this.vx / speed) * this.maxSpeed;
+                    this.vy = (this.vy / speed) * this.maxSpeed;
+                }
+
+                this.x += this.vx;
+                this.y += this.vy;
+
+                // Handle world boundaries
+                if (this.x < this.size || this.x > config.world.width - this.size) this.vx *= -1;
+                if (this.y < this.size || this.y > config.world.height - this.size) this.vy *= -1;
+
+                this.age += 1/60; // Assuming 60 FPS
+                this.energy -= 0.2;
+
+                if (this.energy <= 0 || this.age > config.worm.lifespan) {
+                    this.die();
+                }
+            }
+
+            reproduce() {
+                if (this.energy >= config.worm.reproductionEnergy) {
+                    this.energy /= 2;
+                    const newGenes = new Genes(this.genes);
+                    return new Worm(this.x, this.y, newGenes);
+                }
+                return null;
+            }
+
+            die() {
+                this.isDead = true;
+                state.totalLifespan += this.age;
+                state.deathsThisGeneration++;
+                if (this.age > state.topLifespan) {
+                    state.topLifespan = this.age;
+                }
+            }
+
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.fill();
+            }
+        }
+
+        class Predator {
+             constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.vx = random(-1, 1);
+                this.vy = random(-1, 1);
+                this.size = config.predator.size;
+                this.maxSpeed = config.predator.maxSpeed;
+            }
+
+            sense(worms) {
+                 let nearestWorm = null;
+                 let minWormDist = config.predator.visionRadius;
+
+                 worms.forEach(w => {
+                     if(w.isDead) return;
+                     const d = distance(this, w);
+                     if (d < minWormDist) {
+                         minWormDist = d;
+                         nearestWorm = w;
+                     }
+                 });
+                 return nearestWorm;
+            }
+
+            update(worms) {
+                const nearestWorm = this.sense(worms);
+
+                if (nearestWorm) {
+                    const desired = normalize({x: nearestWorm.x - this.x, y: nearestWorm.y - this.y});
+                    this.vx += desired.x * 0.05;
+                    this.vy += desired.y * 0.05;
+                }
+                
+                const speed = Math.sqrt(this.vx ** 2 + this.vy ** 2);
+                if (speed > this.maxSpeed) {
+                    this.vx = (this.vx / speed) * this.maxSpeed;
+                    this.vy = (this.vy / speed) * this.maxSpeed;
+                }
+
+                this.x += this.vx;
+                this.y += this.vy;
+
+                if (this.x < this.size || this.x > config.world.width - this.size) this.vx *= -1;
+                if (this.y < this.size || this.y > config.world.height - this.size) this.vy *= -1;
+            }
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                const angle = Math.atan2(this.vy, this.vx);
+                ctx.rotate(angle);
+                ctx.beginPath();
+                ctx.moveTo(this.size, 0);
+                ctx.lineTo(-this.size / 2, -this.size / 2);
+                ctx.lineTo(-this.size / 2, this.size / 2);
+                ctx.closePath();
+                ctx.fillStyle = 'hsl(0, 80%, 60%)';
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        class Food {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.size = config.food.size;
+            }
+
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fillStyle = 'hsl(120, 80%, 70%)';
+                ctx.fill();
+            }
+        }
+
+        // --- Core Simulation Logic ---
+        function init() {
+            state.worms = [];
+            state.predators = [];
+            state.food = [];
+            state.generation = 1;
+            state.frameCount = 0;
+            state.totalLifespan = 0;
+            state.deathsThisGeneration = 0;
+            state.topLifespan = 0;
+
+            for (let i = 0; i < config.simulation.initialWorms; i++) {
+                state.worms.push(new Worm(random(0, config.world.width), random(0, config.world.height)));
+            }
+            for (let i = 0; i < config.simulation.initialPredators; i++) {
+                state.predators.push(new Predator(random(0, config.world.width), random(0, config.world.height)));
+            }
+        }
+        
+        function updateStats() {
+            populationStat.textContent = state.worms.filter(w => !w.isDead).length;
+            lifespanStat.textContent = state.deathsThisGeneration > 0 ? (state.totalLifespan / state.deathsThisGeneration).toFixed(2) + 's' : '0s';
+            generationStat.textContent = state.generation;
+            topLifespanStat.textContent = state.topLifespan.toFixed(2) + 's';
+        }
+
+        function gameLoop() {
+            if (state.isRunning) {
+                const loopCount = state.isFastForward ? 2 : 1;
+                for (let i = 0; i < loopCount; i++) {
+                    runSimulationStep();
+                }
+            }
+
+            // Drawing
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            state.food.forEach(f => f.draw());
+            state.worms.forEach(w => !w.isDead && w.draw());
+            state.predators.forEach(p => p.draw());
+            
+            updateStats();
+            requestAnimationFrame(gameLoop);
+        }
+
+        function runSimulationStep() {
+            state.frameCount++;
+
+            // Spawn food
+            if (Math.random() < config.simulation.foodSpawnRate && state.food.length < config.simulation.maxFood) {
+                state.food.push(new Food(random(10, config.world.width - 10), random(10, config.world.height - 10)));
+            }
+            
+            // Spawn predators
+            if(Math.random() < config.simulation.predatorSpawnChance && state.predators.length < config.simulation.maxPredators) {
+                state.predators.push(new Predator(random(0, config.world.width), random(0, config.world.height)));
+            }
+
+            const newWorms = [];
+
+            // Update worms and check for interactions
+            state.worms.forEach(worm => {
+                if (worm.isDead) return;
+                
+                worm.update(state.food, state.predators);
+                
+                // Check for eating food
+                for (let i = state.food.length - 1; i >= 0; i--) {
+                    if (distance(worm, state.food[i]) < worm.size + state.food[i].size) {
+                        worm.energy += config.food.energy;
+                        state.food.splice(i, 1);
+                    }
+                }
+                
+                // Check for reproduction
+                const offspring = worm.reproduce();
+                if (offspring) newWorms.push(offspring);
+
+                // Check for being eaten
+                state.predators.forEach(predator => {
+                    if (distance(worm, predator) < worm.size + predator.size/2) {
+                        worm.die();
+                    }
+                });
+            });
+
+            // Update predators
+            state.predators.forEach(p => p.update(state.worms));
+
+            // Add offspring and filter out dead worms
+            state.worms = state.worms.filter(w => !w.isDead).concat(newWorms);
+            
+            // Handle extinction and start new generation
+            if (state.worms.length === 0) {
+                state.generation++;
+                state.totalLifespan = 0;
+                state.deathsThisGeneration = 0;
+                // Respawn with slightly better genes (conceptual, as best didn't survive)
+                // In a real scenario you'd save the best genes before they all died.
+                // For this sim, we just restart.
+                for (let i = 0; i < config.simulation.initialWorms; i++) {
+                    state.worms.push(new Worm(random(0, config.world.width), random(0, config.world.height)));
+                }
+            }
+        }
+        
+        // --- Event Handlers ---
+        function resizeCanvas() {
+            const ratio = config.world.height / config.world.width;
+            const newWidth = canvas.parentElement.clientWidth;
+            const newHeight = newWidth * ratio;
+            
+            canvas.style.width = `${newWidth}px`;
+            canvas.style.height = `${newHeight}px`;
+            
+            canvas.width = config.world.width;
+            canvas.height = config.world.height;
+        }
+
+        startPauseBtn.addEventListener('click', () => {
+            state.isRunning = !state.isRunning;
+            startPauseBtn.textContent = state.isRunning ? 'Pause' : 'Start';
+            startPauseBtn.classList.toggle('active', state.isRunning);
+        });
+
+        resetBtn.addEventListener('click', () => {
+            init();
+            if (!state.isRunning) {
+                // To redraw the initial state if paused
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                state.worms.forEach(w => w.draw());
+                state.predators.forEach(p => p.draw());
+                updateStats();
+            }
+        });
+
+        fastForwardBtn.addEventListener('click', () => {
+            state.isFastForward = !state.isFastForward;
+            fastForwardBtn.textContent = state.isFastForward ? '1x Speed' : '2x Speed';
+            fastForwardBtn.classList.toggle('active', state.isFastForward);
+        });
+        
+        window.addEventListener('resize', resizeCanvas);
+
+        // --- Initialisation ---
+        resizeCanvas();
+        init();
+        gameLoop();
+    </script>
+</body>
+</html>
