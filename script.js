@@ -7,22 +7,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Add a click event listener to the reset button
     resetButton.addEventListener('click', () => {
-        // This is where you would put your game's "start" or "reset" logic
-        
         console.log('New puzzle requested!');
         
-        // You can update the placeholder text
-        gameContainer.innerHTML = '<p class="placeholder-text">Generating new puzzle...</p>';
-        
-        // For demonstration, an alert
-        alert('This will start a new puzzle!');
-
-        // --- ADD YOUR GAME LOGIC HERE ---
-        // For example: drawBoard();
+        // Call the function to create our game board
+        createGrid(5); // This will create a 5x5 grid. You can change the number.
     });
 
-    // You can add more game functions here
-    // function drawBoard() { ... }
-    // function checkWin() { ... }
+    /**
+     * Creates a game grid of a specified size.
+     * @param {number} size - The number of rows and columns (e.g., 5 for 5x5).
+     */
+    function createGrid(size) {
+        // Clear the old placeholder text or previous grid
+        gameContainer.innerHTML = ''; 
+        
+        // Set up the grid layout using CSS Grid
+        // This tells the container how many columns to have
+        gameContainer.style.gridTemplateColumns = `repeat(${size}, 1fr)`;
+
+        // Loop to create all the cells
+        for (let i = 0; i < size * size; i++) {
+            // Create a new <div> element for each cell
+            const cell = document.createElement('div');
+            
+            // Add a CSS class to it for styling
+            cell.classList.add('grid-cell');
+            
+            // Add it to the game container
+            gameContainer.appendChild(cell);
+        }
+    }
 
 });
